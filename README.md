@@ -1,5 +1,16 @@
 # smtprelay
 
+
+## Differences to the original smtprelay
+
+This fork of `smtprelay` is for a very special setup where users are authenticated against a local dovecot user db.
+
+The same credentials are then used for authorization against the upstream smtp server.
+
+To allow variations in sender names, exim address expansion testing is used to get the underlying mailbox/user name.
+
+## Abstract
+
 [![Go Report Card](https://goreportcard.com/badge/github.com/decke/smtprelay)](https://goreportcard.com/report/github.com/decke/smtprelay)
 
 Simple Golang based SMTP relay/proxy server that accepts mail via SMTP
