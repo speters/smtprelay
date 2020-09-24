@@ -1,7 +1,7 @@
 #!/bin/sh
 
 PROJECT=smtprelay
-VERSION=1.3.0
+VERSION=$(git describe | sed -s 's/^v//')
 
 for goos in freebsd linux windows
 do
@@ -18,16 +18,15 @@ do
 
       if [ ${GOOS} = "windows" ]; then
         BINARY=${PROJECT}.exe
-        sed -I '' -e 's/;logfile =.*/logfile =/g' ${RELDIR}/${PROJECT}.ini
-        sed -I '' -e 's/$/^M/' ${RELDIR}/${PROJECT}.ini
+        sed -i -e 's/;logfile =.*/logfile =/g' ${RELDIR}/${PROJECT}.ini
+        sed -i -e 's/$/^M/' ${RELDIR}/${PROJECT}.ini
       else
         BINARY=${PROJECT}
       fi
 
       go build -ldflags="-s -w" -o ${RELDIR}/${BINARY} || exit 1
 
-      chown -R root:wheel ${RELDIR} || exit 1
-      tar cvfJ ${RELDIR}.tar.xz ${RELDIR} || exit 1
+      tar --owner=root --group=wheel -cvJf ${RELDIR}.tar.xz ${RELDIR} || exit 1
       rm -rf ${RELDIR}
    done
 done
