@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/smtp"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -36,16 +39,67 @@ func connectionChecker(peer smtpd.Peer) error {
 	return smtpd.Error{Code: 421, Message: "Denied"}
 }
 
+func resolvealias(email string) (string, error) {
+	if *eximBT == "" {
+		return "", errors.New("exim_bt unset")
+	}
+	args := strings.Fields(*eximBT)
+	args = append(args, email)
+	cmd := exec.Command(args[0], args[1:]...)
+
+	r, _ := cmd.StdoutPipe()
+	cmd.Stderr = cmd.Stdout
+	done := make(chan struct{})
+	scanner := bufio.NewScanner(r)
+
+	re, _ := regexp.Compile("^R: dovecot for (.+)")
+	re2, _ := regexp.Compile("^ +router = dovecot, transport = dovecot_deliver")
+	e := ""
+	found := false
+
+	go func() {
+		for scanner.Scan() {
+			line := scanner.Text()
+			m := re.FindStringSubmatch(line)
+			if len(m) == 2 {
+				e = m[1]
+			}
+			if re2.MatchString(line) {
+				found = true
+			}
+		}
+		done <- struct{}{}
+
+	}()
+
+	_ = cmd.Start()
+	<-done
+	_ = cmd.Wait()
+
+	if found {
+		if email != e {
+			log.Printf("resolved: <%s> is local <%s>\n", email, e)
+		}
+		return e, nil
+	}
+
+	return "", errors.New("No local mailbox")
+}
+
 func senderChecker(peer smtpd.Peer, addr string) error {
 	// check sender address from auth file if user is authenticated
 	if *allowedUsers != "" && peer.Username != "" {
-		_, email, err := AuthFetch(peer.Username)
+		_, _, err := AuthFetch(peer.Username)
 		if err != nil {
-			return smtpd.Error{Code: 451, Message: "Bad sender address"}
+			return smtpd.Error{Code: 451, Message: "Bad sender address (not authorized)"}
 		}
 
-		if strings.ToLower(addr) != strings.ToLower(email) {
-			return smtpd.Error{Code: 451, Message: "Bad sender address"}
+		// check if addr routes back to authorized address
+		mailname := ""
+		mailname, err = resolvealias(addr)
+
+		if strings.ToLower(peer.Username) != strings.ToLower(mailname) {
+			return smtpd.Error{Code: 451, Message: "Bad sender address (" + err.Error() + ")"}
 		}
 	}
 
@@ -105,12 +159,21 @@ func mailHandler(peer smtpd.Peer, env smtpd.Envelope) error {
 	var auth smtp.Auth
 	host, _, _ := net.SplitHostPort(*remoteHost)
 
-	if *remoteUser != "" && *remotePass != "" {
+	rUser := *remoteUser
+	rPass := *remotePass
+
+	if rUser == "_" || rPass == "_" {
+		rUser = peer.Username
+		rPass = peer.Password
+		// log.Printf("remote auth with %s:%s\n", rUser, rPass)
+	}
+
+	if rUser != "" && rPass != "" {
 		switch *remoteAuth {
 		case "plain":
-			auth = smtp.PlainAuth("", *remoteUser, *remotePass, host)
+			auth = smtp.PlainAuth("", rUser, rPass, host)
 		case "login":
-			auth = LoginAuth(*remoteUser, *remotePass)
+			auth = LoginAuth(rUser, rPass)
 		default:
 			return smtpd.Error{Code: 530, Message: "Authentication method not supported"}
 		}

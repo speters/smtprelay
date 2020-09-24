@@ -2,8 +2,11 @@ package main
 
 import (
 	"bufio"
+	"encoding/csv"
 	"errors"
+	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
@@ -39,16 +42,27 @@ func AuthFetch(username string) (string, string, error) {
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		parts := strings.Fields(scanner.Text())
+	reader := csv.NewReader(bufio.NewReader(file))
+	reader.Comma = ':'
+	reader.Comment = '#'
 
-		if len(parts) != 3 {
-			continue
+	re, _ := regexp.Compile("{([[:word:]]+)}")
+	scheme := "BCRYPT"
+
+	for {
+		parts, error := reader.Read()
+		if error == io.EOF {
+			break
+		} else if error != nil {
+			return "", "", error
 		}
-
-		if strings.ToLower(username) == strings.ToLower(parts[0]) {
-			return parts[1], parts[2], nil
+		if (len(parts) > 1) && (strings.ToLower(username) == strings.ToLower(parts[0])) {
+			m := re.FindStringSubmatch(parts[1])
+			if len(m) == 2 {
+				scheme = m[1]
+				parts[1] = re.ReplaceAllString(parts[1], ``)
+			}
+			return parts[1], scheme, nil
 		}
 	}
 
@@ -56,12 +70,20 @@ func AuthFetch(username string) (string, string, error) {
 }
 
 func AuthCheckPassword(username string, secret string) error {
-	hash, _, err := AuthFetch(username)
+	hash, scheme, err := AuthFetch(username)
 	if err != nil {
 		return err
 	}
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(secret)) == nil {
-		return nil
+	if strings.ToUpper(scheme) == "BCRYPT" {
+		if bcrypt.CompareHashAndPassword([]byte(hash), []byte(secret)) == nil {
+			return nil
+		}
+	} else if strings.ToUpper(scheme) == "PLAIN" {
+		if hash == secret {
+			return nil
+		}
+	} else {
+		return errors.New("Unknown hashing scheme")
 	}
 	return errors.New("Password invalid")
 }
